@@ -1,4 +1,4 @@
-"""Read-only access to markdown todo lists under lists/.
+"""Read-only access to markdown todo lists stored in the Obsidian vault.
 
 The bot never writes to these files itself — only the approved Claude
 agent does, and only after a human "approve" reply. See agent_runner.py.
@@ -8,7 +8,7 @@ import re
 from pathlib import Path
 
 BASE_DIR = Path(__file__).parent
-LISTS_DIR = BASE_DIR / "lists"
+LISTS_DIR = Path("/home/alexander/vaults/Bitovi/Tasks/Homelab")
 
 CHECKBOX_RE = re.compile(r'^\s*-\s\[(?P<mark>[ xX])\]\s(?P<text>.*)$')
 

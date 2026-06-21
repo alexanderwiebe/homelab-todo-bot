@@ -1,12 +1,12 @@
 # homelab-todo-bot
 
-Telegram bot for a homelab todo list. Lists live as markdown checkboxes in `lists/*.md`. The bot answers "what's outstanding" queries directly, and gates any actual work behind an approval step using Claude Code's own `--permission-mode plan` / `--resume` mechanism — see `agent_runner.py`.
+Telegram bot for a homelab todo list. Lists live as markdown checkboxes in the Obsidian vault at `~/vaults/Bitovi/Tasks/Homelab/*.md` (outside this repo, so they version with the vault, not with this code). The bot answers "what's outstanding" queries directly, and gates any actual work behind an approval step using Claude Code's own `--permission-mode plan` / `--resume` mechanism — see `agent_runner.py`.
 
 ## Architecture
 
 ```
 bot.py        long-polls Telegram, routes messages
-todo_store.py reads lists/*.md (bot never writes to these — only the approved agent does)
+todo_store.py reads ~/vaults/Bitovi/Tasks/Homelab/*.md (bot never writes to these — only the approved agent does)
 agent_runner.py  claude CLI subprocess calls: plan / revise / execute
 intent.py     free-text -> {action, list} via a fast tool-free claude call
 state.py      per-chat pending_plan state (state.json)
@@ -14,11 +14,11 @@ state.py      per-chat pending_plan state (state.json)
 
 ## Safety — do not relax without a deliberate decision
 
-- `--add-dir` is scoped via `CLAUDE_ADD_DIRS` in `.env` — keep it narrow (`homelab-todo-bot` + `docker`, not `~`).
+- `--add-dir` is scoped via `CLAUDE_ADD_DIRS` in `.env` — keep it narrow (`vaults/Bitovi/Tasks/Homelab` + `docker`, not the whole vault and not `~`).
 - `--allowedTools` is explicitly restricted to `Bash,Read,Edit,Write,Grep,Glob` — no `WebFetch`/`WebSearch`, no MCP tools.
 - Execute phase uses `--permission-mode acceptEdits`, never `--dangerously-skip-permissions`. `acceptEdits` still respects `--add-dir`/`--allowedTools`; skip-permissions does not.
 - Every incoming Telegram message is checked against `TELEGRAM_CHAT_ID` before any processing. Unauthorized senders are dropped silently.
-- The bot itself never edits `lists/*.md` — only the Claude agent does, only after a human "approve" reply.
+- The bot itself never edits the list files — only the Claude agent does, only after a human "approve" reply.
 
 ## Patterns borrowed from `~/ai-briefing/`
 
