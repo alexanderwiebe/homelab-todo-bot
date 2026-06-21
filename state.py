@@ -25,12 +25,13 @@ def get_pending_plan(chat_id) -> dict | None:
     return state.get("chats", {}).get(str(chat_id), {}).get("pending_plan")
 
 
-def set_pending_plan(chat_id, list_name: str, session_id: str) -> None:
+def set_pending_plan(chat_id, list_name: str, session_id: str, item_text: str) -> None:
     state = load_state()
     chats = state.setdefault("chats", {})
     chats[str(chat_id)] = {
         "pending_plan": {
             "list": list_name,
+            "item_text": item_text,
             "session_id": session_id,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "status": "awaiting_approval",

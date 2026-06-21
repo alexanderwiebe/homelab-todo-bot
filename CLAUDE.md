@@ -18,7 +18,7 @@ state.py      per-chat pending_plan state (state.json)
 - `--allowedTools` is explicitly restricted to `Bash,Read,Edit,Write,Grep,Glob` — no `WebFetch`/`WebSearch`, no MCP tools.
 - Execute phase uses `--permission-mode acceptEdits`, never `--dangerously-skip-permissions`. `acceptEdits` still respects `--add-dir`/`--allowedTools`; skip-permissions does not.
 - Every incoming Telegram message is checked against `TELEGRAM_CHAT_ID` before any processing. Unauthorized senders are dropped silently.
-- The bot itself never edits the list files — only the Claude agent does, only after a human "approve" reply.
+- The bot writes list files directly *only* for additive, low-risk operations: creating a new list (`/newlist`) and appending a new item (`/add`), via `todo_store.create_list`/`add_item`. Checking off or otherwise modifying existing items still goes through the Claude agent + human approval (`/work`) — that path is not relaxed.
 
 ## Patterns borrowed from `~/ai-briefing/`
 

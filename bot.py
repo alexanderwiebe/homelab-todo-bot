@@ -3,7 +3,7 @@
 Homelab Todo Bot — Telegram message listener.
 
 Long-polls getUpdates() and routes messages:
-  - slash commands (/lists, /todo, /work, /help, /cancel)
+  - slash commands (/lists, /todo, /work, /newlist, /add, /help, /cancel)
   - pending-plan replies (approve / cancel / feedback)
   - free text -> intent classification -> list_tasks | start_work | unknown
 """
@@ -69,11 +69,31 @@ def get_updates(token, offset, timeout=30):
     result = telegram_post(token, "getUpdates", {
         "offset": offset,
         "timeout": timeout,
-        "allowed_updates": ["message"],
+        "allowed_updates": ["message", "callback_query"],
     })
     if not result.get("ok"):
         raise RuntimeError(f"getUpdates failed: {result}")
     return result.get("result", [])
+
+
+def answer_callback_query(token, callback_query_id, text=None):
+    payload = {"callback_query_id": callback_query_id}
+    if text:
+        payload["text"] = text
+    telegram_post(token, "answerCallbackQuery", payload)
+
+
+def send_buttons(token, chat_id, text, buttons):
+    """buttons: list of (label, callback_data) tuples, one per row."""
+    telegram_post(token, "sendMessage", {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True,
+        "reply_markup": {
+            "inline_keyboard": [[{"text": label, "callback_data": data}] for label, data in buttons]
+        },
+    })
 
 
 def _chunk_text(text: str, max_len: int = TELEGRAM_MAX_LEN) -> list[str]:
@@ -127,12 +147,49 @@ def cmd_todo(token, chat_id, arg: str | None):
     send_message(token, chat_id, todo_store.format_outstanding(items))
 
 
+def cmd_newlist(token, chat_id, arg: str | None):
+    if not arg:
+        send_message(token, chat_id, "Usage: /newlist &lt;name&gt;")
+        return
+    name = arg.strip()
+    if not todo_store.valid_list_name(name):
+        send_message(token, chat_id,
+            "⚠️ Invalid list name. Use letters, numbers, hyphens, and underscores only.")
+        return
+    if todo_store.ensure_list_exists(name):
+        send_message(token, chat_id, f"⚠️ List <code>{name}</code> already exists.")
+        return
+    if todo_store.create_list(name):
+        send_message(token, chat_id, f"✅ Created list <b>{name}</b>.")
+    else:
+        send_message(token, chat_id, f"❌ Could not create list <code>{name}</code>.")
+
+
+def cmd_add(token, chat_id, arg: str | None):
+    if not arg or " " not in arg.strip():
+        send_message(token, chat_id, "Usage: /add &lt;list&gt; &lt;item text&gt;")
+        return
+    list_name, item_text = arg.strip().split(maxsplit=1)
+    if not todo_store.ensure_list_exists(list_name):
+        names = ", ".join(todo_store.list_names()) or "(none)"
+        send_message(token, chat_id,
+            f"⚠️ No such list: <code>{list_name}</code>\nAvailable: {names}\n"
+            f"Use /newlist {list_name} to create it first.")
+        return
+    if todo_store.add_item(list_name, item_text):
+        send_message(token, chat_id, f"✅ Added to <b>{list_name}</b>: {item_text}")
+    else:
+        send_message(token, chat_id, "❌ Could not add item.")
+
+
 def cmd_help(token, chat_id):
     send_message(token, chat_id,
         "<b>Homelab Todo Bot</b>\n"
         "/lists — show available lists\n"
         "/todo [list] — show outstanding tasks\n"
         "/work &lt;list&gt; — propose a plan to work on a list\n"
+        "/newlist &lt;name&gt; — create a new list\n"
+        "/add &lt;list&gt; &lt;item text&gt; — add an item to a list\n"
         "/cancel — discard a pending plan\n"
         "/help — this message\n\n"
         "You can also just ask in plain English, e.g. \"what's outstanding\".")
@@ -145,6 +202,10 @@ def cmd_cancel(token, chat_id):
         return
     state.clear_pending_plan(chat_id)
     send_message(token, chat_id, "Cancelled.")
+
+
+def _truncate(text: str, max_len: int = 60) -> str:
+    return text if len(text) <= max_len else text[:max_len - 1] + "…"
 
 
 def cmd_work(token, chat_id, arg: str, add_dirs: list[str]):
@@ -161,14 +222,44 @@ def cmd_work(token, chat_id, arg: str, add_dirs: list[str]):
             "or /cancel to discard it.")
         return
 
-    send_message(token, chat_id, f"🔍 Planning for <b>{arg}</b>... (this can take a few minutes)")
-    result, err = agent_runner.start_plan(arg, f"Start working on the list '{arg}'.", add_dirs)
+    unchecked = [item for item in todo_store.read_items(arg) if not item["checked"]]
+    if not unchecked:
+        send_message(token, chat_id, f"✅ Nothing outstanding in <b>{arg}</b>.")
+        return
+
+    buttons = [
+        (_truncate(item["text"]), f"work:{arg}:{item['line_no']}")
+        for item in unchecked
+    ]
+    send_buttons(token, chat_id, f"Pick a task to start a plan for in <b>{arg}</b>:", buttons)
+
+
+def start_plan_for_item(token, chat_id, list_name: str, line_no: int, add_dirs: list[str]):
+    if state.get_pending_plan(chat_id):
+        send_message(token, chat_id,
+            "⚠️ A plan is already pending approval. Reply approve/cancel/feedback first, "
+            "or /cancel to discard it.")
+        return
+
+    items = {item["line_no"]: item for item in todo_store.read_items(list_name)}
+    item = items.get(line_no)
+    if not item or item["checked"]:
+        send_message(token, chat_id, "⚠️ That item no longer exists or is already checked off.")
+        return
+    item_text = item["text"]
+
+    send_message(token, chat_id, f"🔍 Planning: <i>{item_text}</i>... (this can take a few minutes)")
+    user_request = (
+        f"Work on this specific outstanding item only: \"{item_text}\". "
+        "Do not address any other items in the list, even if you notice they're also outstanding."
+    )
+    result, err = agent_runner.start_plan(list_name, user_request, add_dirs)
     if err:
         send_message(token, chat_id, f"❌ Claude CLI error: {err}")
         return
-    state.set_pending_plan(chat_id, arg, result["session_id"])
+    state.set_pending_plan(chat_id, list_name, result["session_id"], item_text)
     send_message(token, chat_id,
-        f"<b>Plan for {arg}</b>\n\n{result['plan_text']}\n\n"
+        f"<b>Plan: {item_text}</b>\n\n{result['plan_text']}\n\n"
         "Reply <b>approve</b> to execute, give feedback to revise, or /cancel.")
 
 
@@ -179,8 +270,8 @@ def handle_plan_reply(token, chat_id, text, pending, add_dirs):
     session_id = pending["session_id"]
 
     if normalized in APPROVE_WORDS:
-        send_message(token, chat_id, f"⚙️ Executing plan for <b>{list_name}</b>...")
-        result, err = agent_runner.execute_plan(session_id, list_name, add_dirs)
+        send_message(token, chat_id, f"⚙️ Executing: <i>{pending['item_text']}</i>...")
+        result, err = agent_runner.execute_plan(session_id, list_name, pending["item_text"], add_dirs)
         if err:
             send_message(token, chat_id,
                 f"⚠️ Execution error: {err}\n"
@@ -204,6 +295,32 @@ def handle_plan_reply(token, chat_id, text, pending, add_dirs):
     send_message(token, chat_id,
         f"<b>Revised plan for {list_name}</b>\n\n{result['plan_text']}\n\n"
         "Reply <b>approve</b> to execute, give feedback to revise again, or /cancel.")
+
+
+# ── Callback query handler (inline button presses) ─────────────────────────────
+def handle_callback_query(token, cq, expected_chat_id, add_dirs):
+    cq_id = cq["id"]
+    msg = cq.get("message") or {}
+    chat_id = msg.get("chat", {}).get("id")
+
+    if chat_id is None or str(chat_id) != str(expected_chat_id):
+        log.warning("Ignoring callback_query from unauthorized chat_id=%s", chat_id)
+        answer_callback_query(token, cq_id)
+        return
+
+    answer_callback_query(token, cq_id)
+
+    data = cq.get("data", "")
+    if not data.startswith("work:"):
+        return
+    try:
+        _, list_name, line_no = data.split(":", 2)
+        line_no = int(line_no)
+    except ValueError:
+        log.warning("Malformed callback data: %s", data)
+        return
+
+    start_plan_for_item(token, chat_id, list_name, line_no, add_dirs)
 
 
 # ── Intent dispatch ────────────────────────────────────────────────────────────
@@ -235,6 +352,10 @@ def dispatch_command(token, chat_id, text, add_dirs):
         cmd_todo(token, chat_id, arg)
     elif cmd == "/work":
         cmd_work(token, chat_id, arg, add_dirs)
+    elif cmd == "/newlist":
+        cmd_newlist(token, chat_id, arg)
+    elif cmd == "/add":
+        cmd_add(token, chat_id, arg)
     elif cmd == "/help" or cmd == "/start":
         cmd_help(token, chat_id)
     elif cmd == "/cancel":
@@ -287,6 +408,9 @@ def main():
                 msg = update.get("message")
                 if msg and "text" in msg:
                     handle_message(token, msg["chat"]["id"], msg["text"], chat_id, add_dirs)
+                cq = update.get("callback_query")
+                if cq:
+                    handle_callback_query(token, cq, chat_id, add_dirs)
         except Exception as e:
             log.warning("Poll error: %s — retrying in 5s", e)
             time.sleep(5)

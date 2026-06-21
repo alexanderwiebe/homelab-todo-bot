@@ -53,9 +53,10 @@ def _run_claude(args: list[str], timeout: int) -> tuple[dict | None, str | None]
 
 def build_plan_prompt(list_name: str, user_request: str) -> str:
     raw_list = todo_store.read_raw(list_name)
+    list_path = todo_store.list_path(list_name)
     return (
         f"You are helping with a homelab todo list called '{list_name}'.\n"
-        f"Current contents of lists/{list_name}.md:\n\n{raw_list}\n\n"
+        f"Current contents of {list_path}:\n\n{raw_list}\n\n"
         f"The user asked: {user_request}\n\n"
         "Investigate what's needed and propose a concrete step-by-step plan "
         "to complete the outstanding (unchecked) item(s) relevant to this request. "
@@ -93,12 +94,13 @@ def revise_plan(session_id: str, feedback: str, add_dirs: list[str]) -> tuple[di
     return {"session_id": session_id, "plan_text": data["result"]}, None
 
 
-def execute_plan(session_id: str, list_name: str, add_dirs: list[str]) -> tuple[dict | None, str | None]:
+def execute_plan(session_id: str, list_name: str, item_text: str, add_dirs: list[str]) -> tuple[dict | None, str | None]:
+    list_path = todo_store.list_path(list_name)
     prompt = (
         "Proceed with the plan. "
-        f"When you complete an item, check it off in lists/{list_name}.md "
-        "by changing '- [ ]' to '- [x]' for that line. "
-        "Do not check off items you did not actually complete."
+        f"Once done, check off only this exact line in {list_path} "
+        f"(change '- [ ]' to '- [x]'): \"{item_text}\". "
+        "Do not check off, edit, or otherwise touch any other line in that file."
     )
     args = ["-p", prompt, "--resume", session_id, "--permission-mode", "acceptEdits",
              "--output-format", "json"]
