@@ -204,8 +204,11 @@ def cmd_cancel(token, chat_id):
     send_message(token, chat_id, "Cancelled.")
 
 
-def _truncate(text: str, max_len: int = 60) -> str:
-    return text if len(text) <= max_len else text[:max_len - 1] + "…"
+def _word_summary(text: str, max_words: int = 8) -> str:
+    words = text.split()
+    if len(words) <= max_words:
+        return text
+    return " ".join(words[:max_words]) + "…"
 
 
 def cmd_work(token, chat_id, arg: str, add_dirs: list[str]):
@@ -227,9 +230,12 @@ def cmd_work(token, chat_id, arg: str, add_dirs: list[str]):
         send_message(token, chat_id, f"✅ Nothing outstanding in <b>{arg}</b>.")
         return
 
+    numbered = "\n".join(f"{i}) {item['text']}" for i, item in enumerate(unchecked, 1))
+    send_message(token, chat_id, f"<b>Outstanding in {arg}</b>\n{numbered}")
+
     buttons = [
-        (_truncate(item["text"]), f"work:{arg}:{item['line_no']}")
-        for item in unchecked
+        (f"{i}) {_word_summary(item['text'])}", f"work:{arg}:{item['line_no']}")
+        for i, item in enumerate(unchecked, 1)
     ]
     send_buttons(token, chat_id, f"Pick a task to start a plan for in <b>{arg}</b>:", buttons)
 
